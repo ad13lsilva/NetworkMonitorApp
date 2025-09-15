@@ -1,0 +1,661 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Windows.Forms.DataVisualization.Charting;
+
+public class NetworkMonitorApp : Form
+{
+    private const int NUM_HOSTS = 4;
+    private List<HostMonitor> hostMonitors = new List<HostMonitor>();
+    private Button startStopButton;
+    private Button reportButton;
+    private TextBox logArea;
+    private bool isMonitoringActive = false;
+    private readonly Dictionary<string, ToolStripDropDown> activeAlerts = new Dictionary<string, ToolStripDropDown>();
+
+    // Ponto de Entrada da Aplicação
+    [STAThread]
+    public static void Main()
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new NetworkMonitorApp());
+    }
+
+    public NetworkMonitorApp()
+    {
+        // Configurações da Janela Principal
+        this.Text = "Monitor de Rede em C# (com Gráficos)";
+        this.Size = new Size(900, 750);
+        this.MinimumSize = new Size(800, 600);
+        this.BackColor = Color.FromArgb(30, 30, 30); // Tema escuro
+        this.StartPosition = FormStartPosition.CenterScreen; // Centraliza a janela
+        
+        CreateUI();
+    }
+
+    private void CreateUI()
+    {
+        // --- Painel de Controle (Topo) ---
+        var topPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Padding = new Padding(10),
+            AutoSize = true,
+            ForeColor = Color.White
+        };
+
+        string[] defaultHosts = { "google.com", "cloudflare.com", "8.8.8.8", "1.1.1.1" };
+        for (int i = 0; i < NUM_HOSTS; i++)
+        {
+            var hostPanel = new Panel { Margin = new Padding(5), AutoSize = true };
+            var label = new Label { Text = $"Host {i + 1}:", Location = new Point(0, 5), AutoSize = true };
+            var textBox = new TextBox { Text = defaultHosts[i], Location = new Point(50, 2), Size = new Size(150, 20) };
+            hostPanel.Controls.Add(label);
+            hostPanel.Controls.Add(textBox);
+            topPanel.Controls.Add(hostPanel);
+            
+            hostMonitors.Add(new HostMonitor(textBox, this)); // Passa a referência do form principal
+        }
+
+        startStopButton = new Button
+        {
+            Text = "Iniciar Monitoramento",
+            Size = new Size(180, 25),
+            Margin = new Padding(10, 5, 5, 5)
+        };
+        startStopButton.Click += StartStopButton_Click;
+        topPanel.Controls.Add(startStopButton);
+        
+        reportButton = new Button
+        {
+            Text = "Gerar Relatório",
+            Size = new Size(140, 25),
+            Margin = new Padding(5),
+            Enabled = false
+        };
+        reportButton.Click += ReportButton_Click;
+        topPanel.Controls.Add(reportButton);
+
+        this.Controls.Add(topPanel);
+
+        // --- Painéis de Monitoramento (Centro) ---
+        var mainPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10),
+            RowCount = 2,
+            ColumnCount = 2,
+        };
+        mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+
+        for (int i = 0; i < NUM_HOSTS; i++)
+        {
+            var monitor = hostMonitors[i];
+            var groupBox = new GroupBox
+            {
+                Text = $"Host: {monitor.HostInput.Text}",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5),
+                ForeColor = Color.White
+            };
+
+            var innerLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+            innerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            innerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var statusPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(5), ColumnCount = 2 };
+            statusPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            statusPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            var statusLabel = new Label { Text = "Status: Aguardando", AutoSize = true, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+            var ipLabel = new Label { Text = "IP: -", AutoSize = true };
+            var latencyLabel = new Label { Text = "Latência: - ms", AutoSize = true };
+            var jitterLabel = new Label { Text = "Jitter: - ms", AutoSize = true };
+            statusPanel.Controls.Add(statusLabel, 0, 0);
+            statusPanel.Controls.Add(ipLabel, 1, 0);
+            statusPanel.Controls.Add(latencyLabel, 0, 1);
+            statusPanel.Controls.Add(jitterLabel, 1, 1);
+
+            var chartPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+            chartPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            chartPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+
+            var latencyChart = CreateChart("Latência (ms)");
+            var availabilityChart = CreateChart("Disponibilidade");
+            chartPanel.Controls.Add(latencyChart, 0, 0);
+            chartPanel.Controls.Add(availabilityChart, 1, 0);
+
+            monitor.StatusLabel = statusLabel;
+            monitor.IpLabel = ipLabel;
+            monitor.LatencyLabel = latencyLabel;
+            monitor.JitterLabel = jitterLabel;
+            monitor.GroupBox = groupBox;
+            monitor.LatencyChart = latencyChart;
+            monitor.AvailabilityChart = availabilityChart;
+
+            innerLayout.Controls.Add(statusPanel, 0, 0);
+            innerLayout.Controls.Add(chartPanel, 0, 1);
+            
+            groupBox.Controls.Add(innerLayout);
+            mainPanel.Controls.Add(groupBox, i % 2, i / 2);
+        }
+
+        this.Controls.Add(mainPanel);
+        mainPanel.BringToFront();
+
+        // --- Log Area (Baixo) ---
+        logArea = new TextBox
+        {
+            Dock = DockStyle.Bottom,
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical,
+            ReadOnly = true,
+            Height = 100,
+            BackColor = Color.FromArgb(45, 45, 48),
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Font = new Font("Consolas", 9)
+        };
+        this.Controls.Add(logArea);
+    }
+
+    private Chart CreateChart(string title)
+    {
+        var chart = new Chart { Dock = DockStyle.Fill, BackColor = Color.FromArgb(45, 45, 48) };
+        var chartArea = new ChartArea("mainArea");
+        chartArea.BackColor = Color.FromArgb(45, 45, 48);
+        
+        chartArea.AxisX.LabelStyle.Enabled = false;
+        chartArea.AxisX.MajorTickMark.Enabled = false;
+        chartArea.AxisX.LineColor = Color.FromArgb(80, 80, 80);
+        chartArea.AxisY.LabelStyle.ForeColor = Color.LightGray;
+        chartArea.AxisY.LineColor = Color.FromArgb(80, 80, 80);
+        chartArea.AxisY.MajorGrid.LineColor = Color.FromArgb(60, 60, 60);
+        chartArea.AxisY.IsStartedFromZero = false;
+
+        if (title.Contains("Disponibilidade"))
+        {
+            chartArea.AxisY.Minimum = 0;
+            chartArea.AxisY.Maximum = 1.1;
+            chartArea.AxisY.Interval = 1;
+        }
+
+        chart.ChartAreas.Add(chartArea);
+        
+        var series = new Series(title)
+        {
+            ChartType = SeriesChartType.Spline,
+            Color = title.Contains("Latência") ? Color.DodgerBlue : Color.LimeGreen,
+            BorderWidth = 2
+        };
+        chart.Series.Add(series);
+        chart.Titles.Add(new Title(title, Docking.Top, new Font("Segoe UI", 9), Color.White));
+        return chart;
+    }
+
+    private void AppendToLog(string message)
+    {
+        if (logArea.InvokeRequired)
+        {
+            logArea.Invoke(new Action(() => AppendToLog(message)));
+        }
+        else
+        {
+            string timestamp = DateTime.Now.ToString("HH:mm:ss");
+            logArea.AppendText($"{timestamp} - {message}{Environment.NewLine}");
+        }
+    }
+
+    private void StartStopButton_Click(object sender, EventArgs e)
+    {
+        isMonitoringActive = !isMonitoringActive;
+        if (isMonitoringActive)
+        {
+            startStopButton.Text = "Parar Monitoramento";
+            reportButton.Enabled = true;
+            AppendToLog("Monitoramento iniciado.");
+            foreach (var monitor in hostMonitors)
+            {
+                monitor.HostInput.Enabled = false;
+                if (!string.IsNullOrWhiteSpace(monitor.HostInput.Text))
+                {
+                    monitor.StartMonitoring();
+                }
+            }
+        }
+        else
+        {
+            startStopButton.Text = "Iniciar Monitoramento";
+            AppendToLog("Monitoramento parado.");
+            foreach (var monitor in hostMonitors)
+            {
+                monitor.HostInput.Enabled = true;
+                monitor.StopMonitoring();
+            }
+        }
+    }
+
+    private void ReportButton_Click(object sender, EventArgs e)
+    {
+        using (var filterDialog = new ReportFilterDialog())
+        {
+            if (filterDialog.ShowDialog(this) == DialogResult.OK)
+            {
+                DateTime startDate = filterDialog.StartDate;
+                DateTime endDate = filterDialog.EndDate;
+
+                using (var sfd = new SaveFileDialog())
+                {
+                    sfd.Filter = "Text Files (*.txt)|*.txt|All files (*.*)|*.*";
+                    sfd.FileName = $"relatorio_rede_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
+                    if (sfd.ShowDialog() == DialogResult.OK)
+                    {
+                        var fullReport = new StringBuilder();
+                        fullReport.AppendLine($"### Relatório de Monitoramento de Rede ###");
+                        fullReport.AppendLine($"Período: de {startDate} a {endDate}\n");
+
+                        foreach (var monitor in hostMonitors)
+                        {
+                            fullReport.Append(monitor.GetReport(startDate, endDate));
+                        }
+
+                        File.WriteAllText(sfd.FileName, fullReport.ToString());
+                        AppendToLog($"Relatório salvo em: {sfd.FileName}");
+                    }
+                }
+            }
+        }
+    }
+
+    public void ShowAlert(string key, string message, Color backColor)
+    {
+        if (activeAlerts.ContainsKey(key)) return; // Não mostra se já existe
+
+        var alertIcon = new Label { Text = "⚠", Font = new Font("Segoe UI Emoji", 14), ForeColor = Color.White, Size = new Size(25, 25) };
+        var content = new Label { Text = message, ForeColor = Color.White, Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Location = new Point(30, 5) };
+        
+        var layout = new Panel {
+            Size = new Size(350, 40),
+            Padding = new Padding(5),
+            BackColor = backColor
+        };
+        layout.Controls.Add(alertIcon);
+        layout.Controls.Add(content);
+
+        var popup = new ToolStripDropDown();
+        popup.Padding = Padding.Empty;
+        popup.Margin = Padding.Empty;
+        popup.Items.Add(new ToolStripControlHost(layout));
+
+        activeAlerts[key] = popup;
+        RepositionPopups();
+
+        popup.Show(this, this.Width, this.Height); // Posição inicial é corrigida por RepositionPopups
+    }
+
+    public void HideAlert(string key)
+    {
+        if (activeAlerts.TryGetValue(key, out var popup))
+        {
+            popup.Close();
+            activeAlerts.Remove(key);
+            RepositionPopups();
+        }
+    }
+
+    private void RepositionPopups()
+    {
+        if (this.InvokeRequired) {
+            this.Invoke(new Action(RepositionPopups));
+            return;
+        }
+        
+        var popupsToPosition = activeAlerts.Values.ToList();
+        for(int i = 0; i < popupsToPosition.Count; i++)
+        {
+            var popup = popupsToPosition[i];
+            var controlHost = popup.Items[0] as ToolStripControlHost;
+            if (controlHost != null)
+            {
+                var control = controlHost.Control;
+                int newY = this.Height - ((i + 1) * (control.Height + 5)) - 40;
+                popup.Location = this.PointToScreen(new Point(this.Width - control.Width - 20, newY));
+            }
+        }
+    }
+}
+
+public class BaseEvent
+{
+    public DateTime StartTime { get; }
+    public DateTime? EndTime { get; set; }
+
+    public BaseEvent()
+    {
+        StartTime = DateTime.Now;
+    }
+
+    public TimeSpan GetDuration(DateTime rangeStart, DateTime rangeEnd)
+    {
+        DateTime effectiveStart = StartTime > rangeStart ? StartTime : rangeStart;
+        DateTime effectiveEnd = (EndTime ?? DateTime.Now) < rangeEnd ? (EndTime ?? DateTime.Now) : rangeEnd;
+        
+        if (effectiveEnd <= effectiveStart) return TimeSpan.Zero;
+        return effectiveEnd - effectiveStart;
+    }
+}
+
+public class DowntimeEvent : BaseEvent { }
+public class HighLatencyEvent : BaseEvent { }
+
+public class HostMonitor
+{
+    private const int JITTER_BUFFER_SIZE = 10;
+    private const int MAX_CHART_POINTS = 50;
+    private const long HIGH_LATENCY_THRESHOLD = 150;
+    public TextBox HostInput { get; }
+    public Label StatusLabel { get; set; }
+    public Label IpLabel { get; set; }
+    public Label LatencyLabel { get; set; }
+    public Label JitterLabel { get; set; }
+    public GroupBox GroupBox { get; set; }
+    public Chart LatencyChart { get; set; }
+    public Chart AvailabilityChart { get; set; }
+
+    private CancellationTokenSource cts;
+    private List<long> recentLatencies = new List<long>();
+    private bool wasAvailable = true;
+    private List<DowntimeEvent> downtimeEvents = new List<DowntimeEvent>();
+    private List<HighLatencyEvent> highLatencyEvents = new List<HighLatencyEvent>();
+    private NetworkMonitorApp mainApp;
+
+    public HostMonitor(TextBox hostInput, NetworkMonitorApp mainApp)
+    {
+        this.HostInput = hostInput;
+        this.mainApp = mainApp;
+    }
+
+    public void StartMonitoring()
+    {
+        cts = new CancellationTokenSource();
+        recentLatencies.Clear();
+        downtimeEvents.Clear();
+        highLatencyEvents.Clear();
+        UpdateUI(() => {
+            LatencyChart.Series[0].Points.Clear();
+            AvailabilityChart.Series[0].Points.Clear();
+        });
+        Task.Run(() => MonitorLoop(cts.Token));
+    }
+
+    public void StopMonitoring()
+    {
+        cts?.Cancel();
+    }
+
+    private async Task MonitorLoop(CancellationToken token)
+    {
+        string host = HostInput.Text;
+        string ipAddress = "-";
+        
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(host);
+            ipAddress = addresses.FirstOrDefault()?.ToString() ?? "N/A";
+        }
+        catch { 
+            ipAddress = "Falha na resolução";
+        }
+        
+        UpdateUI(() => IpLabel.Text = $"IP: {ipAddress}");
+        UpdateUI(() => GroupBox.Text = $"Host: {host}");
+
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                using (var pinger = new Ping())
+                {
+                    var reply = await pinger.SendPingAsync(host, 1500);
+                    if (reply.Status == IPStatus.Success)
+                    {
+                        HandleAvailable(reply.RoundtripTime);
+                    }
+                    else
+                    {
+                        HandleUnavailable();
+                    }
+                }
+            }
+            catch (PingException) { HandleUnavailable(); }
+            
+            await Task.Delay(2000, token);
+        }
+    }
+
+    private void HandleAvailable(long latency)
+    {
+        UpdateUI(() =>
+        {
+            StatusLabel.Text = "Status: Disponível";
+            StatusLabel.ForeColor = Color.LimeGreen;
+            LatencyLabel.Text = $"Latência: {latency} ms";
+        });
+        UpdateChart(LatencyChart, latency);
+        UpdateChart(AvailabilityChart, 1);
+        UpdateJitter(latency);
+
+        if (!wasAvailable)
+        {
+            var openEvent = downtimeEvents.LastOrDefault(d => !d.EndTime.HasValue);
+            if (openEvent != null)
+            {
+                openEvent.EndTime = DateTime.Now;
+            }
+            UpdateUI(() => mainApp.HideAlert($"{HostInput.Text}_unavailable"));
+        }
+        wasAvailable = true;
+
+        var openHighLatencyEvent = highLatencyEvents.LastOrDefault(h => !h.EndTime.HasValue);
+        if (latency > HIGH_LATENCY_THRESHOLD)
+        {
+            if (openHighLatencyEvent == null)
+            {
+                highLatencyEvents.Add(new HighLatencyEvent());
+                UpdateUI(() => mainApp.ShowAlert($"{HostInput.Text}_highlatency", $"Latência alta em {HostInput.Text} ({latency} ms)", Color.FromArgb(255, 140, 0)));
+            }
+        }
+        else
+        {
+            if (openHighLatencyEvent != null)
+            {
+                openHighLatencyEvent.EndTime = DateTime.Now;
+                UpdateUI(() => mainApp.HideAlert($"{HostInput.Text}_highlatency"));
+            }
+        }
+    }
+
+    private void HandleUnavailable()
+    {
+        UpdateUI(() =>
+        {
+            StatusLabel.Text = "Status: Indisponível";
+            StatusLabel.ForeColor = Color.Tomato;
+            LatencyLabel.Text = "Latência: - ms";
+            JitterLabel.Text = "Jitter: - ms";
+        });
+        UpdateChart(LatencyChart, 0);
+        UpdateChart(AvailabilityChart, 0);
+
+        if (wasAvailable)
+        {
+            downtimeEvents.Add(new DowntimeEvent());
+            UpdateUI(() => mainApp.ShowAlert($"{HostInput.Text}_unavailable", $"Host {HostInput.Text} está indisponível!", Color.FromArgb(201, 24, 74)));
+        }
+        wasAvailable = false;
+        recentLatencies.Clear();
+
+        var openHighLatencyEvent = highLatencyEvents.LastOrDefault(h => !h.EndTime.HasValue);
+        if (openHighLatencyEvent != null)
+        {
+            openHighLatencyEvent.EndTime = DateTime.Now;
+            UpdateUI(() => mainApp.HideAlert($"{HostInput.Text}_highlatency"));
+        }
+    }
+    
+    private void UpdateJitter(long currentLatency)
+    {
+        recentLatencies.Add(currentLatency);
+        if (recentLatencies.Count > JITTER_BUFFER_SIZE)
+        {
+            recentLatencies.RemoveAt(0);
+        }
+
+        if (recentLatencies.Count < 2)
+        {
+            UpdateUI(() => JitterLabel.Text = "Jitter: - ms");
+            return;
+        }
+
+        double mean = recentLatencies.Average();
+        double sumOfSquares = recentLatencies.Sum(lat => Math.Pow(lat - mean, 2));
+        double stdDev = Math.Sqrt(sumOfSquares / recentLatencies.Count);
+
+        UpdateUI(() => JitterLabel.Text = $"Jitter: {stdDev:F2} ms");
+    }
+
+    private void UpdateChart(Chart chart, long value)
+    {
+        UpdateUI(() => {
+            var series = chart.Series[0];
+            series.Points.AddY(value); 
+
+            if (series.Points.Count > MAX_CHART_POINTS)
+            {
+                series.Points.RemoveAt(0);
+            }
+            if (chart.ChartAreas[0].AxisY.Minimum == 0)
+            {
+                // Mantém eixo fixo para disponibilidade
+            }
+            else
+            {
+                double maxVal = 0;
+                if (series.Points.Count > 0)
+                {
+                    maxVal = series.Points.Max(p => p.YValues[0]);
+                }
+                chart.ChartAreas[0].AxisY.Maximum = Math.Max(maxVal * 1.2, 50);
+            }
+        });
+    }
+    
+    public string GetReport(DateTime start, DateTime end)
+    {
+        var reportBuilder = new StringBuilder();
+        reportBuilder.AppendLine($"--- Relatório para Host: {HostInput.Text} ---");
+        
+        reportBuilder.AppendLine("\nEventos de Indisponibilidade:");
+        var filteredDowntime = downtimeEvents.Where(d => d.StartTime < end && (d.EndTime ?? DateTime.Now) > start).ToList();
+        if (!filteredDowntime.Any())
+        {
+            reportBuilder.AppendLine("Nenhuma indisponibilidade registrada no período.");
+        }
+        foreach(var ev in filteredDowntime)
+        {
+            reportBuilder.AppendLine($"- Início: {ev.StartTime:G}, Fim: {(ev.EndTime.HasValue ? ev.EndTime.Value.ToString("G") : "Em andamento")}, Duração: {ev.GetDuration(start, end).TotalSeconds:F2}s");
+        }
+        var totalDowntime = filteredDowntime.Sum(d => d.GetDuration(start, end).TotalSeconds);
+        reportBuilder.AppendLine($"Tempo Total de Indisponibilidade: {totalDowntime:F2} segundos");
+        
+        reportBuilder.AppendLine("\nEventos de Latência Alta (>150ms):");
+        var filteredHighLatency = highLatencyEvents.Where(h => h.StartTime < end && (h.EndTime ?? DateTime.Now) > start).ToList();
+        if (!filteredHighLatency.Any())
+        {
+            reportBuilder.AppendLine("Nenhuma latência alta registrada no período.");
+        }
+        foreach(var ev in filteredHighLatency)
+        {
+            reportBuilder.AppendLine($"- Início: {ev.StartTime:G}, Fim: {(ev.EndTime.HasValue ? ev.EndTime.Value.ToString("G") : "Em andamento")}, Duração: {ev.GetDuration(start, end).TotalSeconds:F2}s");
+        }
+
+        reportBuilder.AppendLine("------------------------------------------\n");
+        return reportBuilder.ToString();
+    }
+
+    private void UpdateUI(Action action)
+    {
+        if (StatusLabel != null)
+        {
+            Form parentForm = StatusLabel.FindForm();
+            if (parentForm != null && !parentForm.IsDisposed)
+            {
+                parentForm.BeginInvoke(action);
+            }
+        }
+    }
+}
+
+public class ReportFilterDialog : Form
+{
+    public DateTime StartDate { get; private set; }
+    public DateTime EndDate { get; private set; }
+
+    private DateTimePicker startDatePicker;
+    private DateTimePicker startTimePicker;
+    private DateTimePicker endDatePicker;
+    private DateTimePicker endTimePicker;
+
+    public ReportFilterDialog()
+    {
+        this.Text = "Filtrar Relatório";
+        this.Size = new Size(340, 220);
+        this.FormBorderStyle = FormBorderStyle.FixedDialog;
+        this.StartPosition = FormStartPosition.CenterParent;
+        this.BackColor = Color.FromArgb(45, 45, 48);
+        this.ForeColor = Color.White;
+
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), RowCount = 3, ColumnCount = 2 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        layout.Controls.Add(new Label { Text = "Data de Início:", AutoSize = true, Anchor = AnchorStyles.Left, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        startDatePicker = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 100 };
+        startTimePicker = new DateTimePicker { Format = DateTimePickerFormat.Time, ShowUpDown = true, Width = 80 };
+        var startPanel = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        startPanel.Controls.AddRange(new Control[] { startDatePicker, startTimePicker });
+        layout.Controls.Add(startPanel, 1, 0);
+
+        layout.Controls.Add(new Label { Text = "Data de Fim:", AutoSize = true, Anchor = AnchorStyles.Left, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+        endDatePicker = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 100 };
+        endTimePicker = new DateTimePicker { Format = DateTimePickerFormat.Time, ShowUpDown = true, Width = 80 };
+        var endPanel = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        endPanel.Controls.AddRange(new Control[] { endDatePicker, endTimePicker });
+        layout.Controls.Add(endPanel, 1, 1);
+        
+        var okButton = new Button { Text = "Gerar", DialogResult = DialogResult.OK };
+        var cancelButton = new Button { Text = "Cancelar", DialogResult = DialogResult.Cancel };
+        okButton.Click += (s, e) => {
+            StartDate = startDatePicker.Value.Date + startTimePicker.Value.TimeOfDay;
+            EndDate = endDatePicker.Value.Date + endTimePicker.Value.TimeOfDay;
+            this.Close();
+        };
+        var buttonPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill };
+        buttonPanel.Controls.AddRange(new Control[] { okButton, cancelButton });
+        layout.Controls.Add(buttonPanel, 0, 2);
+        layout.SetColumnSpan(buttonPanel, 2);
+
+        this.Controls.Add(layout);
+    }
+}
