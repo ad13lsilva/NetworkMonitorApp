@@ -1,0 +1,55 @@
+Monitor de Rede Multi-Host em C#
+
+
+🎯 Objetivo
+Este projeto é uma aplicação de desktop para Windows, desenvolvida em C#, que serve como uma ferramenta de diagnóstico e monitoramento de rede. O objetivo principal é fornecer uma visão clara e em tempo real da saúde da conexão com múltiplos hosts (servidores, sites, etc.) simultaneamente. A aplicação foi inspirada em ferramentas de monitoramento profissionais como o Zabbix, focando em uma interface visual prática e informativa.
+
+✨ Funcionalidades
+Monitoramento de 4 Hosts: Permite monitorar até quatro hosts ao mesmo tempo.
+
+Métricas em Tempo Real: Exibe status (Disponível/Indisponível), endereço IP, latência (ping) e jitter, com atualizações a cada 2 segundos.
+
+Gráficos Dinâmicos: Cada host possui gráficos de linha para Latência e Disponibilidade, mostrando o histórico recente da conexão.
+
+Alertas Visuais: Notificações pop-up persistentes são exibidas em cascata para eventos de indisponibilidade (vermelho) ou latência alta (>150ms) (laranja).
+
+Relatórios Detalhados: Gera relatórios em formato .txt com a opção de filtrar por data e hora. O relatório inclui um log detalhado de cada evento de indisponibilidade e latência alta, com duração, início e fim.
+
+Interface Responsiva: O layout da aplicação se adapta a diferentes tamanhos de tela.
+
+🛠️ Tecnologias Utilizadas
+Linguagem: C#
+
+Framework: .NET com Windows Forms (WinForms)
+
+Biblioteca de Gráficos: System.Windows.Forms.DataVisualization.Charting
+
+IDE de Desenvolvimento: Visual Studio 2022
+
+Instalador: Microsoft Visual Studio Installer Projects
+
+🧠 O Que Eu Aprendi
+O desenvolvimento desta aplicação foi uma jornada de aprendizado significativa, especialmente na transição de conceitos de outras linguagens (como Java) para o ecossistema .NET.
+
+UI/UX com WinForms: Aprendi que, mesmo sendo um framework mais antigo, é totalmente possível criar interfaces modernas e responsivas com o WinForms. O uso estratégico de TableLayoutPanel foi crucial para garantir a responsividade, e a personalização de cores e fontes permitiu a criação de um tema escuro agradável.
+
+Multithreading e Assincronia (async/await): Este foi o maior aprendizado. Manter a interface gráfica (UI) responsiva enquanto se realizam operações de rede contínuas é um desafio. O uso intensivo de async/await e Task.Run foi essencial para executar os pings e outras tarefas em background. Além disso, compreendi a fundo a necessidade de usar Invoke para atualizar os componentes da UI a partir de outras threads de forma segura.
+
+Gerenciamento de Estado Complexo: Gerenciar o estado de múltiplos hosts, cada um com seus próprios eventos (indisponibilidade, latência alta), timers e alertas, exigiu uma organização cuidadosa do código. A criação da classe HostMonitor para encapsular toda a lógica de um único host foi uma decisão de design fundamental para manter o código limpo e escalável.
+
+Criação de Componentes Customizados: A implementação do sistema de alertas pop-up em cascata não é uma funcionalidade nativa do WinForms. Tive que criar uma solução customizada usando ToolStripDropDown para simular esse comportamento, o que foi um excelente exercício de criatividade e aprofundamento no framework.
+
+Empacotamento e Distribuição: A etapa final de criar um instalador .msi com o Visual Studio Installer Projects me deu uma visão prática do ciclo de vida completo de uma aplicação de desktop, desde a concepção até a distribuição para o usuário final.
+
+🚀 Como Executar
+Clone este repositório.
+
+Abra a solução (.sln) no Visual Studio 2022.
+
+Adicione o pacote NuGet System.Windows.Forms.DataVisualization ao projeto.
+
+Vá em Tools > NuGet Package Manager > Manage NuGet Packages for Solution...
+
+Procure por System.Windows.Forms.DataVisualization e instale-o.
+
+Pressione F5 ou clique no botão "Start" para compilar e executar a aplicação.
